@@ -1,797 +1,824 @@
-import sys
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import ttk, messagebox
+import sqlite3
 from datetime import datetime
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QDate
-from PyQt5.QtGui import QFont, QPalette, QColor
 
-# ===================== VERİ SINIFLARI =====================
+# --- GLOBAL TEMA VE PREMİUM RENK PALETİ ---
+ctk.set_appearance_mode("Dark")  
+ctk.set_default_color_theme("blue") 
+
+COLORS = {    
+    "bg_dark": "#09090b",       
+    "bg_panel": "#18181b",      
+    "bg_card": "#27272a",       
+    "border": "#3f3f46",        
+    "text_main": "#f4f4f5",     
+    "text_muted": "#a1a1aa",    
+    "primary": "#3b82f6",       
+    "primary_hover": "#2563eb", 
+    "success": "#10b981",       
+    "success_hover": "#059669",
+    "warning": "#f59e0b",       
+    "danger": "#ef4444",        
+    "danger_hover": "#dc2626"
+}
+
+# ================= SQLITE VERİTABANI YÖNETİCİSİ =================
+class DatabaseManager:
+    def __init__(self, db_name="prokurs.db"):
+        self.conn = sqlite3.connect(db_name)
+        self.cursor = self.conn.cursor()
+        self._create_tables()
+        self._ilk_verileri_bas()
+
+    def _create_tables(self):
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS adminler (
+            kullanici_adi TEXT PRIMARY KEY, sifre TEXT)''')
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS egitmenler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ad TEXT UNIQUE, uzmanlik TEXT)''')
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS ogrenciler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ad TEXT, email TEXT)''')
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS kurslar (
+            id TEXT PRIMARY KEY, ad TEXT, egitmen_ad TEXT, kont INTEGER, fiyat REAL DEFAULT 0)''')
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS kayitlar (
+            ogrenci_id INTEGER, kurs_id TEXT,
+            PRIMARY KEY(ogrenci_id, kurs_id))''')
+        
+        self.cursor.execute("PRAGMA table_info(kurslar)")
+        columns = [row[1] for row in self.cursor.fetchall()]
+        if "fiyat" not in columns:
+            self.cursor.execute("ALTER TABLE kurslar ADD COLUMN fiyat REAL DEFAULT 0")
+        self.conn.commit()
+
+    def _ilk_verileri_bas(self):
+        self.cursor.execute("SELECT COUNT(*) FROM adminler")
+        if self.cursor.fetchone()[0] == 0:
+            self.cursor.execute("INSERT INTO adminler (kullanici_adi, sifre) VALUES ('admin', '1234')")
+            
+        self.cursor.execute("SELECT COUNT(*) FROM egitmenler")
+        if self.cursor.fetchone()[0] == 0:
+            self.egitmen_ekle("Ahmet Yılmaz", "Yapay Zeka Uzmanı")
+            self.egitmen_ekle("Zeynep Demir", "Arayüz Tasarımı")
+            self.ogrenci_ekle("Ali Kaya", "ali@mail.com")
+            self.ogrenci_ekle("Ayşe Çelik", "ayse@mail.com")
+            self.ogrenci_ekle("Caner Gezer", "caner@mail.com")
+            
+            self.kurs_ekle("PY101", "Sıfırdan Python Programlama", "Ahmet Yılmaz", 20, 1499.0)
+            self.kurs_ekle("UX202", "Modern Arayüz Tasarımı", "Zeynep Demir", 15, 1299.0)
+            self.kayit_ekle(1, "PY101")
+            self.kayit_ekle(3, "PY101")
+        self.conn.commit()
+
+    def admin_girisi_yap(self, k_adi, sifre):
+        self.cursor.execute("SELECT * FROM adminler WHERE kullanici_adi=? AND sifre=?", (k_adi, sifre))
+        return self.cursor.fetchone() is not None
+
+    def egitmen_ekle(self, ad, uzmanlik):
+        try:
+            self.cursor.execute("INSERT INTO egitmenler (ad, uzmanlik) VALUES (?, ?)", (ad, uzmanlik))
+            self.conn.commit(); return True, "Eğitmen başarıyla sisteme eklendi."
+        except sqlite3.IntegrityError: return False, "Bu isimde bir eğitmen zaten var!"
+
+    def ogrenci_ekle(self, ad, email):
+        try:
+            self.cursor.execute("INSERT INTO ogrenciler (ad, email) VALUES (?, ?)", (ad, email))
+            self.conn.commit()
+            return True, "Öğrenci kaydı başarıyla oluşturuldu.", self.cursor.lastrowid
+        except Exception as e: return False, str(e), None
+
+    def kurs_ekle(self, k_id, ad, egitmen_ad, kont, fiyat):
+        try:
+            self.cursor.execute("INSERT INTO kurslar (id, ad, egitmen_ad, kont, fiyat) VALUES (?, ?, ?, ?, ?)", (k_id, ad, egitmen_ad, kont, fiyat))
+            self.conn.commit(); return True, "Yeni kurs başarıyla oluşturuldu."
+        except sqlite3.IntegrityError: return False, "Bu Kurs Kodu zaten kullanılıyor!"
+
+    def kayit_ekle(self, ogrenci_id, kurs_id):
+        try:
+            self.cursor.execute("INSERT INTO kayitlar (ogrenci_id, kurs_id) VALUES (?, ?)", (ogrenci_id, kurs_id))
+            self.conn.commit(); return True, "Öğrenci kursa başarıyla kaydedildi."
+        except sqlite3.IntegrityError: return False, "Öğrenci bu kursa zaten kayıtlı!"
+
+    def egitmenleri_getir(self): return self.cursor.execute("SELECT * FROM egitmenler").fetchall()
+    def ogrencileri_getir(self): return self.cursor.execute("SELECT * FROM ogrenciler").fetchall()
+    def kurslari_getir(self): return self.cursor.execute("SELECT * FROM kurslar").fetchall()
+    def kayitlari_getir(self): return self.cursor.execute("SELECT * FROM kayitlar").fetchall()
+    
+    def get_stats(self):
+        return {
+            'egitmen': self.cursor.execute("SELECT COUNT(*) FROM egitmenler WHERE ad != ''").fetchone()[0],
+            'ogrenci': self.cursor.execute("SELECT COUNT(*) FROM ogrenciler WHERE ad != ''").fetchone()[0],
+            'kurs': self.cursor.execute("SELECT COUNT(*) FROM kurslar").fetchone()[0],
+            'kayit': self.cursor.execute("SELECT COUNT(*) FROM kayitlar").fetchone()[0]
+        }
+
+    def kayit_sil(self, tablo, kosul_sutunu, kosul_degeri):
+        query = f"DELETE FROM {tablo} WHERE {kosul_sutunu} = ?"
+        try:
+            self.cursor.execute(query, (kosul_degeri,))
+            self.conn.commit()
+            return True, "Kayıt veritabanından tamamen silindi."
+        except Exception as e: return False, str(e)
+        
+    def kurs_kaydi_sil(self, ogrenci_id, kurs_id):
+        try:
+            self.cursor.execute("DELETE FROM kayitlar WHERE ogrenci_id=? AND kurs_id=?", (ogrenci_id, kurs_id))
+            self.conn.commit()
+            return True, "Öğrencinin bu kurstan kaydı başarıyla silindi."
+        except Exception as e: return False, str(e)
+
+# ================= İŞ MANTIĞI =================
 class Egitmen:
-    def __init__(self, id, ad, soyad, uzmanlik, telefon="", email=""):
-        self.id = id
-        self.ad = ad
-        self.soyad = soyad
-        self.uzmanlik = uzmanlik
-        self.telefon = telefon
-        self.email = email
-        self.tarih = datetime.now().strftime("%d.%m.%Y")
-
+    def __init__(self, ad, uzmanlik): self.ad, self.uzmanlik = ad, uzmanlik
 class Ogrenci:
-    def __init__(self, id, ad, soyad, email, telefon=""):
-        self.id = id
-        self.ad = ad
-        self.soyad = soyad
-        self.email = email
-        self.telefon = telefon
-        self.tarih = datetime.now().strftime("%d.%m.%Y")
-
+    def __init__(self, ogrenci_id, ad, email): self.id, self.ad, self.email = ogrenci_id, ad, email
 class Kurs:
-    def __init__(self, id, ad, egitmen_id, egitmen_adi, kontenjan, fiyat, aciklama=""):
-        self.id = id
-        self.ad = ad
-        self.egitmen_id = egitmen_id
-        self.egitmen_adi = egitmen_adi
-        self.kontenjan = kontenjan
-        self.fiyat = fiyat
-        self.aciklama = aciklama
+    def __init__(self, k_id, ad, egitmen, kont, fiyat=0.0):
+        self.id, self.ad, self.egitmen, self.kont, self.fiyat = k_id, ad, egitmen, kont, float(fiyat or 0)
         self.ogrenciler = []
-        self.tarih = datetime.now().strftime("%d.%m.%Y")
+    def kaydet(self, ogr):
+        if len(self.ogrenciler) < self.kont and ogr not in self.ogrenciler:
+            self.ogrenciler.append(ogr); return True, "Kayıt işlemi onaylandı."
+        return False, "Kayıt Başarısız! Kontenjan dolu."
+    def kayit_iptal(self, ogr):
+        if ogr in self.ogrenciler:
+            self.ogrenciler.remove(ogr)
+            return True
+        return False
 
+# ================= GİRİŞ EKRANI =================
+class LoginScreen(ctk.CTkFrame):
+    def __init__(self, master, login_basarili_callback, **kwargs):
+        super().__init__(master, fg_color=COLORS["bg_dark"], **kwargs)
+        self.login_basarili_callback = login_basarili_callback
+        self.db = DatabaseManager()
 
-# ===================== ANA PENCERE =====================
-class KursPlatformu(QMainWindow):
+        self.pack(fill="both", expand=True)
+
+        card = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], width=400, height=500, corner_radius=20, border_width=1, border_color=COLORS["border"])
+        card.place(relx=0.5, rely=0.5, anchor="center")
+        card.pack_propagate(False)
+
+        ctk.CTkLabel(card, text="🎓 PROKURS", font=ctk.CTkFont(family="Segoe UI", size=32, weight="bold"), text_color=COLORS["text_main"]).pack(pady=(45, 5))
+        ctk.CTkLabel(card, text="Güvenli Yönetim Paneli", font=ctk.CTkFont(family="Segoe UI", size=14), text_color=COLORS["primary"]).pack(pady=(0, 40))
+
+        self.ent_user = ctk.CTkEntry(card, placeholder_text="Kullanıcı Adı", font=ctk.CTkFont(size=14), width=300, height=50, 
+                                     fg_color=COLORS["bg_dark"], border_color=COLORS["border"], corner_radius=10)
+        self.ent_user.pack(pady=10)
+        self.ent_user.bind("<Enter>", lambda e: self.ent_user.configure(border_color=COLORS["primary"]))
+        self.ent_user.bind("<Leave>", lambda e: self.ent_user.configure(border_color=COLORS["border"]))
+
+        self.ent_pass = ctk.CTkEntry(card, placeholder_text="Şifre", show="•", font=ctk.CTkFont(size=14), width=300, height=50, 
+                                     fg_color=COLORS["bg_dark"], border_color=COLORS["border"], corner_radius=10)
+        self.ent_pass.pack(pady=10)
+        self.ent_pass.bind("<Enter>", lambda e: self.ent_pass.configure(border_color=COLORS["primary"]))
+        self.ent_pass.bind("<Leave>", lambda e: self.ent_pass.configure(border_color=COLORS["border"]))
+        
+        self.ent_pass.bind("<Return>", lambda e: self._giris_kontrol())
+
+        self.lbl_hata = ctk.CTkLabel(card, text="", text_color=COLORS["danger"], font=ctk.CTkFont(size=12))
+        self.lbl_hata.pack(pady=5)
+
+        ctk.CTkButton(card, text="Oturum Aç", width=300, height=50, font=ctk.CTkFont(size=15, weight="bold"), 
+                      fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"], corner_radius=10, 
+                      command=self._giris_kontrol).pack(pady=(10, 0))
+
+        ctk.CTkLabel(card, text="Varsayılan: admin / 1234", text_color=COLORS["text_muted"], font=ctk.CTkFont(size=11)).pack(pady=15)
+
+    def _giris_kontrol(self):
+        k_adi = self.ent_user.get().strip()
+        sifre = self.ent_pass.get().strip()
+
+        if not k_adi or not sifre:
+            self.lbl_hata.configure(text="Lütfen kullanıcı adı ve şifre giriniz!")
+            return
+
+        if self.db.admin_girisi_yap(k_adi, sifre):
+            self.login_basarili_callback()
+        else:
+            self.lbl_hata.configure(text="Hatalı kullanıcı adı veya şifre!")
+
+# ================= ANA ARAYÜZ (GELİŞMİŞ SAAS MİMARİSİ) =================
+class AdminDashboard(ctk.CTkFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, fg_color=COLORS["bg_dark"], corner_radius=0, **kwargs)
+        self.db = DatabaseManager()
+        self.egitmenler, self.ogrenciler, self.kurslar = [], {}, {}
+        
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+
+        self.f_logo = ctk.CTkFont(family="Segoe UI", size=26, weight="bold")
+        self.f_menu = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
+        self.f_title = ctk.CTkFont(family="Segoe UI", size=24, weight="bold")
+        self.f_label = ctk.CTkFont(family="Segoe UI", size=13)
+        self.f_input = ctk.CTkFont(family="Segoe UI", size=14)
+
+        self._setup_tree_style()
+        self._baslangic_verilerini_yukle()
+
+        self._build_sidebar()
+        self._build_main_area()
+        self._verileri_guncelle()
+
+        self.after(150, lambda: self.select_frame_by_name("Genel Bakış"))
+
+    def _setup_tree_style(self):
+        style = ttk.Style()
+        style.theme_use("default") 
+        style.configure("Treeview", background=COLORS["bg_card"], foreground=COLORS["text_main"],
+                        fieldbackground=COLORS["bg_card"], rowheight=45, borderwidth=0, font=("Segoe UI", 11))
+        style.configure("Treeview.Heading", background=COLORS["bg_panel"], foreground=COLORS["text_muted"], 
+                        font=("Segoe UI", 12, "bold"), borderwidth=0, padding=8)
+        style.map('Treeview', background=[('selected', COLORS["primary"])])
+        style.layout("Treeview", [('Treeview.treearea', {'sticky': 'nswe'})]) 
+
+    def _build_sidebar(self):
+        self.sidebar_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_panel"], corner_radius=0, width=280)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(7, weight=1)
+
+        logo_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        logo_frame.grid(row=0, column=0, padx=20, pady=(30, 40), sticky="ew")
+        ctk.CTkLabel(logo_frame, text="🎓 PROKURS", font=self.f_logo, text_color=COLORS["text_main"]).pack(anchor="center")
+        ctk.CTkLabel(logo_frame, text="Admin Workspace", font=self.f_label, text_color=COLORS["primary"]).pack(anchor="center")
+
+        self.active_indicator = ctk.CTkFrame(self.sidebar_frame, width=5, height=45, fg_color=COLORS["primary"], corner_radius=3)
+        self.active_indicator.place(x=5, y=-100)
+
+        self.menu_buttons = {}
+        # Emojiyi sadeleştirilmiş (görünmez formatsız) haliyle değiştirdik
+        menus = [
+            ("📊", "Genel Bakış"),
+            ("👨‍🏫", "Eğitmen Yönetimi"),
+            ("🎓", "Öğrenci Yönetimi"),
+            ("📚", "Kurs Yönetimi"),
+            ("⚡", "Hızlı Kayıt"),
+            ("🗄", "Veritabanı Gezgini")
+        ]
+
+        def on_enter(e, b_name):
+            if self.page_title.cget("text") != b_name.upper():
+                self.menu_buttons[b_name].configure(text_color=COLORS["text_main"])
+
+        def on_leave(e, b_name):
+            if self.page_title.cget("text") != b_name.upper():
+                self.menu_buttons[b_name].configure(text_color=COLORS["text_muted"])
+
+        for i, (icon, name) in enumerate(menus):
+            # Dinamik boşluk ayarı - Hiza sorununu kesin çözer
+            bosluk = " " if name == "Veritabanı Gezgini" else "   "
+            
+            btn = ctk.CTkButton(
+                self.sidebar_frame, text=f"  {icon}{bosluk}{name}", font=self.f_menu, anchor="w",
+                fg_color="transparent", text_color=COLORS["text_muted"], hover_color=COLORS["bg_card"],
+                corner_radius=10, height=45, command=lambda n=name: self.select_frame_by_name(n)
+            )
+            btn.grid(row=i+1, column=0, padx=20, pady=4, sticky="ew")
+            btn.bind("<Enter>", lambda e, n=name: on_enter(e, n))
+            btn.bind("<Leave>", lambda e, n=name: on_leave(e, n))
+            self.menu_buttons[name] = btn
+
+        profile_f = ctk.CTkFrame(self.sidebar_frame, fg_color=COLORS["bg_card"], corner_radius=12)
+        profile_f.grid(row=8, column=0, padx=15, pady=20, sticky="s")
+        ctk.CTkLabel(profile_f, text="👤 Admin: Yetkili", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_main"]).pack(pady=(10,0), padx=20)
+        ctk.CTkLabel(profile_f, text="V 14.1 (Proje Sürümü)", font=ctk.CTkFont(size=11), text_color=COLORS["success"]).pack(pady=(0,10), padx=20)
+
+    def _safe_animate_indicator(self, btn):
+        target_y = btn.winfo_y()
+        if target_y <= 10:
+            self.after(50, lambda: self._safe_animate_indicator(btn))
+            return
+        if hasattr(self, '_anim_id') and self._anim_id:
+            self.after_cancel(self._anim_id)
+        current_y = float(self.active_indicator.place_info().get('y', -100))
+        if current_y <= 0:
+            self.active_indicator.place(x=5, y=target_y)
+        else:
+            self._animate_step(current_y, target_y)
+
+    def _animate_step(self, current_y, target_y):
+        if abs(current_y - target_y) < 1.5:
+            self.active_indicator.place(x=5, y=target_y)
+            return
+        new_y = current_y + (target_y - current_y) * 0.25
+        self.active_indicator.place(x=5, y=new_y)
+        self._anim_id = self.after(15, self._animate_step, new_y, target_y)
+
+    # --- ANA İÇERİK ALANI ---
+    def _build_main_area(self):
+        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=35, pady=25)
+        self.main_frame.grid_rowconfigure(1, weight=1)
+        self.main_frame.grid_columnconfigure(0, weight=1)
+
+        header_f = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        header_f.grid(row=0, column=0, sticky="ew", pady=(0, 20))
+        
+        self.page_title = ctk.CTkLabel(header_f, text="Dashboard", font=self.f_title, text_color=COLORS["text_main"])
+        self.page_title.pack(side="left")
+        
+        tarih = datetime.now().strftime("%d %B %Y")
+        ctk.CTkLabel(header_f, text=f"📅 {tarih}", font=self.f_label, text_color=COLORS["text_muted"]).pack(side="right", padx=10)
+
+        self.content_area = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.content_area.grid(row=1, column=0, sticky="nsew")
+
+        self.frames = {}
+        self._page_dashboard()
+        self._page_egitmen()
+        self._page_ogrenci()
+        self._page_kurs()
+        self._page_kayit()
+        self._page_veritabani()
+
+    def select_frame_by_name(self, name):
+        for btn_name, btn in self.menu_buttons.items():
+            if btn_name == name:
+                btn.configure(fg_color=COLORS["bg_card"], text_color=COLORS["primary"])
+                self._safe_animate_indicator(btn)
+            else:
+                btn.configure(fg_color="transparent", text_color=COLORS["text_muted"])
+        
+        self.page_title.configure(text=name.upper())
+
+        for frame_name, frame in self.frames.items():
+            if frame_name == name: frame.pack(fill="both", expand=True)
+            else: frame.pack_forget()
+
+    # ================= UI YARDIMCI METOTLARI =================
+    def _create_input(self, parent, label, placeholder):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.pack(fill="x", pady=(15, 5), padx=25)
+        ctk.CTkLabel(f, text=label, font=self.f_label, text_color=COLORS["text_muted"]).pack(anchor="w", padx=5, pady=(0,5))
+        ent = ctk.CTkEntry(f, placeholder_text=placeholder, font=self.f_input, height=45, fg_color=COLORS["bg_dark"], 
+                           border_color=COLORS["border"], border_width=1, corner_radius=10)
+        ent.pack(fill="x")
+        ent.bind("<Enter>", lambda e: ent.configure(border_color=COLORS["primary"]))
+        ent.bind("<Leave>", lambda e: ent.configure(border_color=COLORS["border"]))
+        return ent
+
+    def _alanlar_dolu_mu(self, *degerler):
+        return all(str(deger).strip() for deger in degerler)
+
+    def _create_table_header(self, parent, title):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.pack(side="top", fill="x", padx=25, pady=(25, 10))
+        ctk.CTkLabel(f, text=title, font=ctk.CTkFont(size=18, weight="bold"), text_color=COLORS["text_main"]).pack(side="left")
+
+    def _create_table_action(self, parent, btn_text, cmd):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.pack(side="bottom", fill="x", padx=25, pady=(10, 25))
+        if cmd:
+            ctk.CTkButton(f, text=btn_text, fg_color=COLORS["danger"], hover_color=COLORS["danger_hover"],
+                          height=45, width=220, font=ctk.CTkFont(size=14, weight="bold"), command=cmd).pack(side="right")
+
+    def _create_tree(self, parent, cols):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.pack(side="top", fill="both", expand=True, padx=25, pady=(0, 10))
+        scroll = ctk.CTkScrollbar(f, orientation="vertical", width=12)
+        scroll.pack(side="right", fill="y")
+        tree = ttk.Treeview(f, columns=cols, show="headings", yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.configure(command=tree.yview)
+        for c in cols: tree.heading(c, text=c); tree.column(c, anchor="center")
+        return tree
+
+    # ================= SAYFALAR =================
+    def _page_dashboard(self):
+        frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.frames["Genel Bakış"] = frame
+        
+        grid_f = ctk.CTkFrame(frame, fg_color="transparent")
+        grid_f.pack(fill="x", pady=(0, 20))
+        grid_f.grid_columnconfigure((0,1,2,3), weight=1, uniform="col")
+
+        self.stat_cards = {}
+        data = [("👨‍🏫 Eğitmenler", "egitmen", COLORS["primary"]), ("🎓 Öğrenciler", "ogrenci", COLORS["success"]),
+                ("📚 Kurslar", "kurs", COLORS["warning"]), ("📝 Kayıt Dağılımı", "kayit", "#A855F7")]
+
+        for i, (title, key, color) in enumerate(data):
+            card = ctk.CTkFrame(grid_f, fg_color=COLORS["bg_card"], corner_radius=15, border_width=1, border_color=COLORS["border"])
+            card.grid(row=0, column=i, padx=10, pady=10, sticky="nsew")
+            
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=15, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", padx=20, pady=(20,0))
+            ana_lbl = ctk.CTkLabel(card, text="0", font=ctk.CTkFont(size=42, weight="bold"), text_color=color)
+            ana_lbl.pack(anchor="w", padx=20, pady=(0, 2))
+            detay_lbl = ctk.CTkLabel(card, text="-", font=ctk.CTkFont(size=12), text_color=COLORS["text_muted"], justify="left", wraplength=180)
+            detay_lbl.pack(anchor="w", padx=20, pady=(0, 20))
+            self.stat_cards[key] = (ana_lbl, detay_lbl) 
+
+        bottom_f = ctk.CTkFrame(frame, fg_color="transparent")
+        bottom_f.pack(fill="both", expand=True)
+        bottom_f.grid_columnconfigure((0,1), weight=1, uniform="col")
+
+        info_card = ctk.CTkFrame(bottom_f, fg_color=COLORS["bg_card"], corner_radius=15)
+        info_card.grid(row=0, column=0, sticky="nsew", padx=10)
+        ctk.CTkLabel(info_card, text="Sistem Özeti", font=self.f_menu, text_color=COLORS["text_main"]).pack(anchor="w", padx=20, pady=(20,10))
+        ctk.CTkLabel(info_card, text="• Tüm veritabanı bağlantıları stabil.\n• Öğrenci ID'leri otomatik atanmaktadır.\n• Finansal veriler gerçek zamanlı hesaplanır.\n• Katı veri doğrulama protokolleri devrededir.", 
+                     font=self.f_label, text_color=COLORS["text_muted"], justify="left").pack(anchor="w", padx=20)
+
+        # ---> FİNANSAL GELİR KARTI <---
+        finans_card = ctk.CTkFrame(bottom_f, fg_color=COLORS["bg_card"], corner_radius=15)
+        finans_card.grid(row=0, column=1, sticky="nsew", padx=10)
+        ctk.CTkLabel(finans_card, text="💸 Toplam Beklenen Gelir (Ciro)", font=self.f_menu, text_color=COLORS["text_main"]).pack(anchor="w", padx=20, pady=(20,10))
+        self.lbl_ciro = ctk.CTkLabel(finans_card, text="0.00 ₺", font=ctk.CTkFont(size=48, weight="bold"), text_color=COLORS["success"])
+        self.lbl_ciro.pack(anchor="w", padx=20, pady=(5, 5))
+        ctk.CTkLabel(finans_card, text="*Kursa kayıtlı öğrenci sayısı x Kurs Fiyatı baz alınır.", font=ctk.CTkFont(size=11), text_color=COLORS["text_muted"]).pack(anchor="w", padx=20)
+
+    def _page_egitmen(self):
+        frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.frames["Eğitmen Yönetimi"] = frame
+        
+        form_card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], width=350, corner_radius=15)
+        form_card.pack(side="left", fill="y", padx=(0, 20))
+        form_card.pack_propagate(False) 
+        
+        ctk.CTkLabel(form_card, text="Yeni Eğitmen Formu", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(25,10))
+        self.ent_egitmen_ad = self._create_input(form_card, "Ad Soyad", "Örn: Ahmet Yılmaz")
+        self.ent_egitmen_uzm = self._create_input(form_card, "Uzmanlık Alanı", "Örn: Yazılım")
+        ctk.CTkButton(form_card, text="+ Sisteme Ekle", fg_color=COLORS["success"], hover_color=COLORS["success_hover"], 
+                      height=45, font=self.f_menu, command=self._islem_egitmen_ekle).pack(fill="x", padx=25, pady=30)
+
+        table_card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], corner_radius=15)
+        table_card.pack(side="right", fill="both", expand=True)
+        
+        self._create_table_header(table_card, "Mevcut Eğitmenler")
+        self._create_table_action(table_card, "❌ Seçili Eğitmeni Sil", self._islem_egitmen_sil)
+        self.tree_egitmen = self._create_tree(table_card, ("Ad Soyad", "Uzmanlık Alanı"))
+
+    def _page_ogrenci(self):
+        frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.frames["Öğrenci Yönetimi"] = frame
+        
+        form_card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], width=350, corner_radius=15)
+        form_card.pack(side="left", fill="y", padx=(0, 20))
+        form_card.pack_propagate(False)
+        
+        ctk.CTkLabel(form_card, text="Öğrenci Kayıt Formu", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(25,10))
+        
+        self.ent_ogr_ad = self._create_input(form_card, "Ad Soyad", "Öğrenci ismi")
+        self.ent_ogr_email = self._create_input(form_card, "Email Adresi", "ornek@mail.com")
+        ctk.CTkLabel(form_card, text="*Öğrenci ID numarası otomatik atanır.", text_color=COLORS["text_muted"], font=ctk.CTkFont(size=11)).pack(pady=(10,0))
+        
+        ctk.CTkButton(form_card, text="+ Öğrenci Oluştur", fg_color=COLORS["success"], hover_color=COLORS["success_hover"], 
+                      height=45, font=self.f_menu, command=self._islem_ogrenci_ekle).pack(fill="x", padx=25, pady=20)
+
+        table_card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], corner_radius=15)
+        table_card.pack(side="right", fill="both", expand=True)
+        
+        # ---> CANLI ARAMA <---
+        top_f = ctk.CTkFrame(table_card, fg_color="transparent")
+        top_f.pack(fill="x", padx=25, pady=(25, 5))
+        
+        ctk.CTkLabel(top_f, text="Sistemdeki Öğrenciler", font=ctk.CTkFont(size=18, weight="bold"), text_color=COLORS["text_main"]).pack(side="left")
+        
+        self.ent_ara_ogr = ctk.CTkEntry(top_f, placeholder_text="🔍 İsim veya Email Ara...", width=200, height=35, fg_color=COLORS["bg_dark"], border_color=COLORS["border"])
+        self.ent_ara_ogr.pack(side="right", padx=(0, 15))
+        self.ent_ara_ogr.bind("<KeyRelease>", self._islem_canli_ara_ogrenci)
+
+        self.tree_ogrenci = self._create_tree(table_card, ("Öğrenci ID", "Ad Soyad", "Email"))
+        self._create_table_action(table_card, "❌ Seçili Öğrenciyi Sil", self._islem_ogrenci_sil)
+
+    def _page_kurs(self):
+        frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.frames["Kurs Yönetimi"] = frame
+        
+        form_card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], width=350, corner_radius=15)
+        form_card.pack(side="left", fill="y", padx=(0, 20))
+        form_card.pack_propagate(False)
+        
+        ctk.CTkLabel(form_card, text="Kurs Oluşturucu", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(25,10))
+        self.ent_kurs_id = self._create_input(form_card, "Kurs Kodu", "Örn: PY101")
+        self.ent_kurs_ad = self._create_input(form_card, "Kurs Adı", "Kursun tam adı")
+        
+        f_cmb = ctk.CTkFrame(form_card, fg_color="transparent")
+        f_cmb.pack(fill="x", pady=(15,5), padx=25)
+        ctk.CTkLabel(f_cmb, text="Öğretmen Adı", font=self.f_label, text_color=COLORS["text_muted"]).pack(anchor="w", padx=5, pady=(0,5))
+        self.cmb_egitmen = ctk.CTkEntry(f_cmb, placeholder_text="Öğretmen adı yazın", font=self.f_input, width=300, height=45,
+                                        fg_color=COLORS["bg_dark"], border_color=COLORS["border"], corner_radius=10)
+        self.cmb_egitmen.pack(fill="x")
+
+        self.ent_kurs_kont = self._create_input(form_card, "Kontenjan", "Sadece rakam giriniz")
+        self.ent_kurs_fiyat = self._create_input(form_card, "Kurs Fiyat", "Sadece rakam giriniz")
+        ctk.CTkButton(form_card, text="+ Kurs Ekle", fg_color=COLORS["success"], hover_color=COLORS["success_hover"], 
+                      height=45, font=self.f_menu, command=self._islem_kurs_ekle).pack(fill="x", padx=25, pady=20)
+
+        table_card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], corner_radius=15)
+        table_card.pack(side="right", fill="both", expand=True)
+        
+        # ---> CANLI ARAMA <---
+        top_f = ctk.CTkFrame(table_card, fg_color="transparent")
+        top_f.pack(fill="x", padx=25, pady=(25, 5))
+        
+        ctk.CTkLabel(top_f, text="Aktif Kurslar (Detay için çift tıkla)", font=ctk.CTkFont(size=18, weight="bold"), text_color=COLORS["text_main"]).pack(side="left")
+        
+        self.ent_ara_kurs = ctk.CTkEntry(top_f, placeholder_text="🔍 Kurs Ara...", width=200, height=35, fg_color=COLORS["bg_dark"], border_color=COLORS["border"])
+        self.ent_ara_kurs.pack(side="right", padx=(0, 15))
+        self.ent_ara_kurs.bind("<KeyRelease>", self._islem_canli_ara_kurs)
+
+        self.tree_kurs = self._create_tree(table_card, ("Kurs Kodu", "Kurs Adı", "Eğitmen", "Doluluk", "Fiyat"))
+        self.tree_kurs.bind("<Double-1>", self._islem_kurs_detay_goster)
+
+    def _page_kayit(self):
+        frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.frames["Hızlı Kayıt"] = frame
+        
+        center_f = ctk.CTkFrame(frame, fg_color="transparent")
+        center_f.pack(expand=True)
+
+        card = ctk.CTkFrame(center_f, fg_color=COLORS["bg_card"], width=450, corner_radius=20, border_width=1, border_color=COLORS["border"])
+        card.pack(pady=20, padx=20)
+        card.pack_propagate(False)
+        card.configure(height=420)
+
+        ctk.CTkLabel(card, text="⚡ Kursa Entegrasyon", font=ctk.CTkFont(size=22, weight="bold"), text_color=COLORS["text_main"]).pack(pady=(35, 10))
+        ctk.CTkLabel(card, text="Sistemde var olan öğrenciyi kursa bağlayın.", font=self.f_label, text_color=COLORS["text_muted"]).pack(pady=(0, 20))
+
+        self.ent_kayit_ogr = self._create_input(card, "Öğrenci ID Numarası", "Örn: 1")
+        self.ent_kayit_kurs = self._create_input(card, "Kurs Kodu", "Örn: PY101")
+        
+        ctk.CTkButton(card, text="Kayıt İşlemini Onayla", fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"], 
+                      height=50, font=self.f_menu, command=self._islem_kursa_kaydet).pack(fill="x", padx=25, pady=(30, 0))
+
+    def _page_veritabani(self):
+        frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.frames["Veritabanı Gezgini"] = frame
+        
+        card = ctk.CTkFrame(frame, fg_color=COLORS["bg_card"], corner_radius=15)
+        card.pack(fill="both", expand=True)
+
+        header_f = ctk.CTkFrame(card, fg_color="transparent")
+        header_f.pack(fill="x", padx=25, pady=(25, 10))
+        ctk.CTkLabel(header_f, text="Ham Tablo Görüntüleyici", font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
+        
+        btn_f = ctk.CTkFrame(header_f, fg_color="transparent")
+        btn_f.pack(side="right")
+        for t in ["egitmenler", "ogrenciler", "kurslar", "kayitlar"]:
+            ctk.CTkButton(btn_f, text=t.upper(), width=100, height=35, fg_color=COLORS["bg_panel"], text_color=COLORS["text_muted"],
+                          hover_color=COLORS["border"], command=lambda n=t: self._db_tablo_yukle(n)).pack(side="left", padx=5)
+
+        self.db_tree = self._create_tree(card, ("Sütun 1", "Sütun 2", "Sütun 3", "Sütun 4"))
+
+    def _db_tablo_yukle(self, table_name):
+        data = self.db.cursor.execute(f"SELECT * FROM {table_name}").fetchall()
+        for row in self.db_tree.get_children(): self.db_tree.delete(row)
+        for r in data: self.db_tree.insert("", "end", values=r)
+
+    # ================= VERİ GÜNCELLEME VE İŞLEM METOTLARI =================
+    def _baslangic_verilerini_yukle(self):
+        self.egitmenler.clear(); self.ogrenciler.clear(); self.kurslar.clear()
+        self.egitmenler = [Egitmen(e[1], e[2]) for e in self.db.egitmenleri_getir()]
+        for o in self.db.ogrencileri_getir(): self.ogrenciler[o[0]] = Ogrenci(o[0], o[1], o[2])
+        for k in self.db.kurslari_getir():
+            e = next((x for x in self.egitmenler if x.ad == k[2]), None)
+            self.kurslar[k[0]] = Kurs(k[0], k[1], e, k[3], k[4] if len(k) > 4 else 0)
+        for kayit in self.db.kayitlari_getir():
+            if kayit[0] in self.ogrenciler and kayit[1] in self.kurslar:
+                self.kurslar[kayit[1]].ogrenciler.append(self.ogrenciler[kayit[0]])
+
+    def _verileri_guncelle(self):
+        gecerli_egitmenler = [e for e in self.egitmenler if e.ad and e.ad.strip()]
+        egitmen_isimleri = ", ".join([e.ad.split()[0] for e in gecerli_egitmenler][:4]) 
+        if len(gecerli_egitmenler) > 4: egitmen_isimleri += "..."
+        
+        gecerli_ogrenciler = [o for o in self.ogrenciler.values() if o.ad and o.ad.strip()]
+        ogrenci_isimleri = ", ".join([o.ad.split()[0] for o in gecerli_ogrenciler][:4])
+        if len(gecerli_ogrenciler) > 4: ogrenci_isimleri += "..."
+        
+        kurs_isimleri = ", ".join([k.id for k in self.kurslar.values()][:4])
+        if len(self.kurslar) > 4: kurs_isimleri += "..."
+        
+        dolu_kurslar = [k for k in self.kurslar.values() if len(k.ogrenciler) > 0]
+        kayit_ozeti = ", ".join([f"{k.id} ({len(k.ogrenciler)})" for k in dolu_kurslar][:3])
+        if len(dolu_kurslar) > 3: kayit_ozeti += "..."
+
+        detaylar = {
+            'egitmen': egitmen_isimleri if egitmen_isimleri else "Kayıt bulunamadı",
+            'ogrenci': ogrenci_isimleri if ogrenci_isimleri else "Kayıt bulunamadı",
+            'kurs': kurs_isimleri if kurs_isimleri else "Kayıt bulunamadı",
+            'kayit': kayit_ozeti if kayit_ozeti else "Hiç kayıt yok"
+        }
+
+        stats = self.db.get_stats()
+        for k, v in stats.items(): 
+            if k in self.stat_cards: 
+                ana_lbl, detay_lbl = self.stat_cards[k]
+                ana_lbl.configure(text=str(v))
+                detay_lbl.configure(text=detaylar[k])
+        
+        # CİRO HESAPLAMA
+        if hasattr(self, 'lbl_ciro'):
+            toplam_ciro = sum([len(k.ogrenciler) * k.fiyat for k in self.kurslar.values()])
+            self.lbl_ciro.configure(text=f"{toplam_ciro:,.2f} ₺")
+
+        def pop(t, d):
+            for r in t.get_children(): t.delete(r)
+            for i in d: t.insert("", "end", values=i)
+            
+        pop(self.tree_egitmen, [(e.ad, e.uzmanlik) for e in self.egitmenler])
+        
+        # Arama Filtresine Göre Güncelle (Eğer arama boşsa hepsini yazar)
+        self._islem_canli_ara_ogrenci()
+        self._islem_canli_ara_kurs()
+
+    # --- CANLI ARAMA (LIVE SEARCH) METOTLARI ---
+    def _islem_canli_ara_ogrenci(self, event=None):
+        query = self.ent_ara_ogr.get().lower().strip()
+        for r in self.tree_ogrenci.get_children(): self.tree_ogrenci.delete(r)
+        
+        for o in self.ogrenciler.values():
+            if query in o.ad.lower() or query in o.email.lower() or query in str(o.id):
+                self.tree_ogrenci.insert("", "end", values=(o.id, o.ad, o.email))
+
+    def _islem_canli_ara_kurs(self, event=None):
+        query = self.ent_ara_kurs.get().lower().strip()
+        for r in self.tree_kurs.get_children(): self.tree_kurs.delete(r)
+        
+        for k in self.kurslar.values():
+            e_ad = k.egitmen.ad if k.egitmen else "Bilinmiyor"
+            if query in k.id.lower() or query in k.ad.lower() or query in e_ad.lower():
+                self.tree_kurs.insert("", "end", values=(k.id, k.ad, e_ad, f"{len(k.ogrenciler)}/{k.kont}", f"{k.fiyat:.2f} ₺"))
+
+    def _islem_egitmen_ekle(self):
+        ad = self.ent_egitmen_ad.get().strip()
+        uzm = self.ent_egitmen_uzm.get().strip()
+        if not self._alanlar_dolu_mu(ad, uzm): return messagebox.showwarning("Eksik Bilgi", "Lütfen tüm alanları doldurunuz!")
+        if any(char.isdigit() for char in ad): return messagebox.showwarning("Hatalı Giriş", "Eğitmen adında rakam bulunamaz!")
+        if any(char.isdigit() for char in uzm): return messagebox.showwarning("Hatalı Giriş", "Uzmanlık alanında rakam bulunamaz!")
+
+        basarili, mesaj = self.db.egitmen_ekle(ad, uzm)
+        if basarili:
+            self.egitmenler.append(Egitmen(ad, uzm))
+            self._verileri_guncelle()
+            self.ent_egitmen_ad.delete(0, 'end'); self.ent_egitmen_uzm.delete(0, 'end')
+            messagebox.showinfo("Başarılı", mesaj)
+        else: messagebox.showerror("Hata", mesaj)
+
+    def _islem_ogrenci_ekle(self):
+        ad, mail = self.ent_ogr_ad.get().strip(), self.ent_ogr_email.get().strip()
+        
+        if not self._alanlar_dolu_mu(ad, mail): return messagebox.showwarning("Eksik", "Bilgileri eksiksiz girin!")
+        if any(char.isdigit() for char in ad): return messagebox.showwarning("Hatalı Giriş", "Öğrenci adında rakam bulunamaz!")
+        if "@" not in mail or "." not in mail: return messagebox.showwarning("Hatalı Giriş", "Lütfen geçerli e-posta girin!")
+        
+        basarili, mesaj, yeni_id = self.db.ogrenci_ekle(ad, mail)
+        if basarili:
+            self.ogrenciler[yeni_id] = Ogrenci(yeni_id, ad, mail)
+            self._verileri_guncelle()
+            self.ent_ogr_ad.delete(0, 'end'); self.ent_ogr_email.delete(0, 'end')
+            messagebox.showinfo("Başarılı", f"{mesaj}\nAtanan Öğrenci ID: {yeni_id}")
+        else: messagebox.showerror("Hata", mesaj)
+
+    def _islem_kurs_ekle(self):
+        k_id = self.ent_kurs_id.get().strip()
+        ad = self.ent_kurs_ad.get().strip()
+        e_ad = self.cmb_egitmen.get().strip()
+        kont_str = self.ent_kurs_kont.get().strip()
+        fiyat_str = self.ent_kurs_fiyat.get().strip()
+        if not self._alanlar_dolu_mu(k_id, ad, e_ad, kont_str, fiyat_str): return messagebox.showwarning("Eksik", "Tüm alanları doldurun!")
+        if not kont_str.isdigit(): return messagebox.showwarning("Hatalı Giriş", "Kontenjan kısmına yalnızca rakam girilmelidir!")
+        if not fiyat_str.replace(',', '.').replace('.', '', 1).isdigit(): return messagebox.showwarning("Hatalı Giriş", "Fiyat kısmına yalnızca sayı girilmelidir!")
+        
+        kont = int(kont_str)
+        fiyat = float(fiyat_str.replace(',', '.'))
+        if not (5 <= kont <= 40): return messagebox.showwarning("Hata", "Kontenjan 5-40 arası olmalı!")
+        if fiyat <= 0: return messagebox.showwarning("Hata", "Fiyat sıfırdan büyük olmalıdır!")
+
+        basarili, mesaj = self.db.kurs_ekle(k_id, ad, e_ad, kont, fiyat)
+        if basarili:
+            e = next((x for x in self.egitmenler if x.ad == e_ad), None)
+            self.kurslar[k_id] = Kurs(k_id, ad, e, kont, fiyat)
+            self._verileri_guncelle()
+            for w in [self.ent_kurs_id, self.ent_kurs_ad, self.ent_kurs_kont, self.ent_kurs_fiyat]: w.delete(0, 'end')
+            messagebox.showinfo("Başarılı", mesaj)
+        else: messagebox.showerror("Hata", mesaj)
+
+    def _islem_kursa_kaydet(self):
+        o_id_str, k_id = self.ent_kayit_ogr.get().strip(), self.ent_kayit_kurs.get().strip()
+        if not self._alanlar_dolu_mu(o_id_str, k_id): return messagebox.showwarning("Eksik", "ID ve Kurs Kodu girin!")
+        if not o_id_str.isdigit(): return messagebox.showwarning("Hatalı Giriş", "Kayıt yapılacak Öğrenci ID yalnızca rakamlardan oluşmalıdır!")
+        
+        o_id = int(o_id_str)
+        if o_id not in self.ogrenciler: return messagebox.showerror("Hata", "Öğrenci bulunamadı!")
+        if k_id not in self.kurslar: return messagebox.showerror("Hata", "Kurs bulunamadı!")
+
+        ok, msg = self.kurslar[k_id].kaydet(self.ogrenciler[o_id])
+        if ok:
+            db_basarili, db_mesaj = self.db.kayit_ekle(o_id, k_id)
+            if db_basarili:
+                self._verileri_guncelle()
+                self.ent_kayit_ogr.delete(0, 'end'); self.ent_kayit_kurs.delete(0, 'end')
+                messagebox.showinfo("Başarılı", msg)
+            else:
+                self.kurslar[k_id].ogrenciler.remove(self.ogrenciler[o_id])
+                messagebox.showerror("Hata", db_mesaj)
+        else: messagebox.showwarning("Hata", msg)
+
+    def _islem_kurs_detay_goster(self, event):
+        secili = self.tree_kurs.selection()
+        if not secili: return
+        
+        k_id = str(self.tree_kurs.item(secili[0])['values'][0])
+        if k_id not in self.kurslar: return
+        kurs = self.kurslar[k_id]
+
+        p = ctk.CTkToplevel(self)
+        p.title(f"Kurs Detay: {kurs.ad}")
+        p.geometry("750x550")
+        p.configure(fg_color=COLORS["bg_dark"])
+        p.attributes("-topmost", True) 
+        p.grab_set() 
+        
+        ctk.CTkLabel(p, text=f"📚 {kurs.ad}", font=self.f_title, text_color=COLORS["text_main"]).pack(pady=(25, 5))
+        lbl_info = ctk.CTkLabel(p, text=f"Öğrenciler ({len(kurs.ogrenciler)}/{kurs.kont}) | Eğitmen: {kurs.egitmen.ad if kurs.egitmen else 'Bilinmiyor'} | Fiyat: {kurs.fiyat:.2f} ₺", font=self.f_menu, text_color=COLORS["text_muted"])
+        lbl_info.pack(pady=(0, 20))
+
+        kart = ctk.CTkFrame(p, fg_color=COLORS["bg_card"], corner_radius=15)
+        kart.pack(fill="both", expand=True, padx=25, pady=(0, 25))
+
+        if not kurs.ogrenciler:
+            ctk.CTkLabel(kart, text="Bu kursa kayıtlı öğrenci yok.", font=self.f_input, text_color=COLORS["text_muted"]).pack(expand=True)
+        else:
+            toolbar = ctk.CTkFrame(kart, fg_color="transparent")
+            toolbar.pack(fill="x", padx=15, pady=(15, 0))
+
+            def _ogrenciyi_kurstan_cikar():
+                secili_ogr = td.selection()
+                if not secili_ogr:
+                    return messagebox.showwarning("Uyarı", "Lütfen tablodan çıkarılacak öğrenciyi seçin!", parent=p)
+                
+                ogr_id = td.item(secili_ogr[0])['values'][0]
+                ogr_ad = td.item(secili_ogr[0])['values'][1]
+                
+                if messagebox.askyesno("Kayıt İptali", f"'{ogr_ad}' isimli öğrencinin bu kurstan kaydı silinecek.\nOnaylıyor musunuz?", parent=p):
+                    ok, msg = self.db.kurs_kaydi_sil(ogr_id, k_id)
+                    if ok:
+                        ogr_obj = self.ogrenciler.get(ogr_id)
+                        if ogr_obj: kurs.kayit_iptal(ogr_obj)
+                        
+                        td.delete(secili_ogr[0])
+                        lbl_info.configure(text=f"Öğrenciler ({len(kurs.ogrenciler)}/{kurs.kont}) | Eğitmen: {kurs.egitmen.ad if kurs.egitmen else 'Bilinmiyor'} | Fiyat: {kurs.fiyat:.2f} ₺")
+                        self._verileri_guncelle()
+                        messagebox.showinfo("Başarılı", msg, parent=p)
+                    else:
+                        messagebox.showerror("Hata", msg, parent=p)
+
+            ctk.CTkButton(toolbar, text="❌ Seçili Öğrenciyi Kurstan Çıkar", fg_color=COLORS["danger"], hover_color=COLORS["danger_hover"], font=self.f_label, command=_ogrenciyi_kurstan_cikar).pack(side="right")
+
+            tf = ctk.CTkFrame(kart, fg_color="transparent")
+            tf.pack(fill="both", expand=True, padx=15, pady=15)
+            ys = ctk.CTkScrollbar(tf, orientation="vertical", width=12)
+            ys.pack(side="right", fill="y")
+            
+            td = ttk.Treeview(tf, columns=("Öğrenci No", "Ad Soyad", "Email Adresi"), show="headings", yscrollcommand=ys.set)
+            td.pack(side="left", fill="both", expand=True)
+            ys.configure(command=td.yview)
+
+            for col in ("Öğrenci No", "Ad Soyad", "Email Adresi"): td.heading(col, text=col)
+            td.column("Öğrenci No", width=100, anchor="center"); td.column("Ad Soyad", width=200); td.column("Email Adresi", width=250)
+            for ogr in kurs.ogrenciler: td.insert("", "end", values=(ogr.id, ogr.ad, ogr.email))
+
+    def _islem_egitmen_sil(self):
+        secili = self.tree_egitmen.selection()
+        if not secili: return messagebox.showwarning("Uyarı", "Lütfen tablodan bir eğitmen seçin!")
+        ad_degeri = self.tree_egitmen.item(secili[0])['values'][0]
+        if messagebox.askyesno("Kalıcı Silme", f"'{ad_degeri}' tamamen silinecek. Onaylıyor musunuz?"):
+            ok, msg = self.db.kayit_sil("egitmenler", "ad", ad_degeri)
+            if ok:
+                self._baslangic_verilerini_yukle(); self._verileri_guncelle(); messagebox.showinfo("Başarılı", msg)
+            else: messagebox.showerror("Hata", msg)
+
+    def _islem_ogrenci_sil(self):
+        secili = self.tree_ogrenci.selection()
+        if not secili: return messagebox.showwarning("Uyarı", "Lütfen tablodan bir öğrenci seçin!")
+        ogr_id = self.tree_ogrenci.item(secili[0])['values'][0]
+        ogr_ad = self.tree_ogrenci.item(secili[0])['values'][1] 
+        if messagebox.askyesno("Kalıcı Silme", f"'{ogr_ad}' tamamen silinecek. Onaylıyor musunuz?"):
+            ok, msg = self.db.kayit_sil("ogrenciler", "id", ogr_id)
+            if ok:
+                self._baslangic_verilerini_yukle(); self._verileri_guncelle(); messagebox.showinfo("Başarılı", msg)
+            else: messagebox.showerror("Hata", msg)
+
+# ================= UYGULAMA YÖNETİCİSİ =================
+class AppController(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.title("🎓 ProKurs | Admin Dashboard v14.1 (Premium)")
+        self.geometry("1400x850")
+        self.minsize(1200, 750)
+        self.configure(fg_color=COLORS["bg_dark"])
+
+        self.login_ekrani = LoginScreen(self, self.login_basarili)
+        
+    def login_basarili(self):
+        self.login_ekrani.pack_forget()
+        self.login_ekrani.destroy()
+        
+        main_container = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], corner_radius=0)
+        main_container.pack(fill="both", expand=True)
+        AdminDashboard(main_container).pack(fill="both", expand=True)
 
-        # Veriler
-        self.egitmenler = []
-        self.ogrenciler = []
-        self.kurslar = []
-
-        self.egitmen_id = 1
-        self.ogrenci_id = 1
-        self.kurs_id = 1
-
-        # Örnek veriler
-        self.ornek_veri_ekle()
-
-        self.setWindowTitle("📚 Online Kurs Platformu")
-        self.setGeometry(100, 100, 1300, 800)
-
-        # Stil
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e2e;
-            }
-            QTabWidget::pane {
-                background-color: #2d2d3d;
-                border-radius: 10px;
-            }
-            QTabBar::tab {
-                background-color: #3d3d4d;
-                color: white;
-                padding: 10px 20px;
-                margin: 5px;
-                border-radius: 8px;
-            }
-            QTabBar::tab:selected {
-                background-color: #5b5bff;
-            }
-            QTableWidget {
-                background-color: #2d2d3d;
-                color: #ffffff;
-                gridline-color: #3d3d4d;
-                border-radius: 8px;
-            }
-            QHeaderView::section {
-                background-color: #5b5bff;
-                color: white;
-                padding: 8px;
-                font-weight: bold;
-            }
-            QPushButton {
-                background-color: #5b5bff;
-                color: white;
-                border: none;
-                padding: 10px;
-                border-radius: 8px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #7b7bff;
-            }
-            QPushButton:red {
-                background-color: #ff5b5b;
-            }
-            QPushButton:red:hover {
-                background-color: #ff7b7b;
-            }
-            QLineEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-                background-color: #3d3d4d;
-                color: white;
-                border: 1px solid #5b5bff;
-                border-radius: 6px;
-                padding: 8px;
-            }
-            QLabel {
-                color: #ffffff;
-            }
-            QGroupBox {
-                color: #5b5bff;
-                font-weight: bold;
-                border: 2px solid #5b5bff;
-                border-radius: 10px;
-                margin-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-
-        self.ui()
-
-    def ornek_veri_ekle(self):
-        # Eğitmenler
-        e1 = Egitmen(self.egitmen_id, "Ahmet", "Yılmaz", "Python Programlama", "555-123-4567", "ahmet@kurs.com")
-        self.egitmenler.append(e1)
-        self.egitmen_id += 1
-
-        e2 = Egitmen(self.egitmen_id, "Mehmet", "Demir", "Web Geliştirme", "555-234-5678", "mehmet@kurs.com")
-        self.egitmenler.append(e2)
-        self.egitmen_id += 1
-
-        e3 = Egitmen(self.egitmen_id, "Ayşe", "Kaya", "Veri Bilimi", "555-345-6789", "ayse@kurs.com")
-        self.egitmenler.append(e3)
-        self.egitmen_id += 1
-
-        # Öğrenciler
-        o1 = Ogrenci(self.ogrenci_id, "Ali", "Veli", "ali@email.com", "555-456-7890")
-        self.ogrenciler.append(o1)
-        self.ogrenci_id += 1
-
-        o2 = Ogrenci(self.ogrenci_id, "Zeynep", "Demir", "zeynep@email.com", "555-567-8901")
-        self.ogrenciler.append(o2)
-        self.ogrenci_id += 1
-
-        # Kurslar
-        k1 = Kurs(self.kurs_id, "Python ile Programlama", 1, "Ahmet Yılmaz", 30, 1500, "Sıfırdan ileri seviye Python")
-        self.kurslar.append(k1)
-        self.kurs_id += 1
-
-        k2 = Kurs(self.kurs_id, "Web Tasarımı", 2, "Mehmet Demir", 25, 1200, "HTML, CSS, JavaScript")
-        self.kurslar.append(k2)
-        self.kurs_id += 1
-
-        k3 = Kurs(self.kurs_id, "Veri Analizi", 3, "Ayşe Kaya", 20, 1800, "Pandas, NumPy, Matplotlib")
-        self.kurslar.append(k3)
-        self.kurs_id += 1
-
-        # Öğrenci kayıtları
-        self.kurslar[0].ogrenciler.append(o1)
-        self.kurslar[1].ogrenciler.append(o2)
-
-    def ui(self):
-        # Merkezi widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-
-        # Ana layout
-        main_layout = QVBoxLayout(central_widget)
-
-        # Başlık
-        baslik = QLabel("📚 ONLINE KURS PLATFORMU")
-        baslik.setAlignment(Qt.AlignCenter)
-        baslik.setStyleSheet("font-size: 28px; font-weight: bold; color: #5b5bff; padding: 20px;")
-        main_layout.addWidget(baslik)
-
-        # Tab widget
-        tabs = QTabWidget()
-
-        # Sekmeleri ekle
-        tabs.addTab(self.egitmen_tab(), "👨‍🏫 Eğitmenler")
-        tabs.addTab(self.ogrenci_tab(), "👨‍🎓 Öğrenciler")
-        tabs.addTab(self.kurs_tab(), "📚 Kurslar")
-        tabs.addTab(self.kayit_tab(), "📝 Kursa Kayıt")
-        tabs.addTab(self.istatistik_tab(), "📊 İstatistikler")
-
-        main_layout.addWidget(tabs)
-
-    # ===================== EGİTMEN SEKMESİ =====================
-    def egitmen_tab(self):
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-
-        # Sol panel - Form
-        sol_panel = QFrame()
-        sol_panel.setStyleSheet("background-color: #2d2d3d; border-radius: 10px;")
-        sol_layout = QVBoxLayout(sol_panel)
-
-        form_baslik = QLabel("Yeni Eğitmen Ekle")
-        form_baslik.setStyleSheet("font-size: 18px; font-weight: bold; color: #5b5bff;")
-        sol_layout.addWidget(form_baslik)
-
-        self.egitmen_ad = QLineEdit()
-        self.egitmen_ad.setPlaceholderText("Ad")
-        sol_layout.addWidget(self.egitmen_ad)
-
-        self.egitmen_soyad = QLineEdit()
-        self.egitmen_soyad.setPlaceholderText("Soyad")
-        sol_layout.addWidget(self.egitmen_soyad)
-
-        self.egitmen_uzmanlik = QLineEdit()
-        self.egitmen_uzmanlik.setPlaceholderText("Uzmanlık")
-        sol_layout.addWidget(self.egitmen_uzmanlik)
-
-        self.egitmen_tel = QLineEdit()
-        self.egitmen_tel.setPlaceholderText("Telefon")
-        sol_layout.addWidget(self.egitmen_tel)
-
-        self.egitmen_email = QLineEdit()
-        self.egitmen_email.setPlaceholderText("Email")
-        sol_layout.addWidget(self.egitmen_email)
-
-        btn_ekle = QPushButton("➕ Eğitmen Ekle")
-        btn_ekle.clicked.connect(self.egitmen_ekle)
-        sol_layout.addWidget(btn_ekle)
-
-        btn_sil = QPushButton("🗑 Seçili Eğitmeni Sil")
-        btn_sil.setStyleSheet("background-color: #ff5b5b;")
-        btn_sil.clicked.connect(self.egitmen_sil)
-        sol_layout.addWidget(btn_sil)
-
-        sol_layout.addStretch()
-
-        # Sağ panel - Tablo
-        self.egitmen_tablo = QTableWidget()
-        self.egitmen_tablo.setColumnCount(6)
-        self.egitmen_tablo.setHorizontalHeaderLabels(["ID", "Ad", "Soyad", "Uzmanlık", "Telefon", "Email"])
-        self.egitmen_tablo.setSelectionBehavior(QTableWidget.SelectRows)
-        self.egitmen_tablo.horizontalHeader().setStretchLastSection(True)
-
-        layout.addWidget(sol_panel, 1)
-        layout.addWidget(self.egitmen_tablo, 2)
-
-        self.egitmen_listele()
-
-        return widget
-
-    def egitmen_ekle(self):
-        if not self.egitmen_ad.text() or not self.egitmen_soyad.text():
-            QMessageBox.warning(self, "Uyarı", "Ad ve Soyad girmelisiniz!")
-            return
-
-        e = Egitmen(
-            self.egitmen_id,
-            self.egitmen_ad.text(),
-            self.egitmen_soyad.text(),
-            self.egitmen_uzmanlik.text(),
-            self.egitmen_tel.text(),
-            self.egitmen_email.text()
-        )
-        self.egitmenler.append(e)
-        self.egitmen_id += 1
-
-        self.egitmen_ad.clear()
-        self.egitmen_soyad.clear()
-        self.egitmen_uzmanlik.clear()
-        self.egitmen_tel.clear()
-        self.egitmen_email.clear()
-
-        self.egitmen_listele()
-        QMessageBox.information(self, "Başarılı", "Eğitmen eklendi!")
-
-    def egitmen_listele(self):
-        self.egitmen_tablo.setRowCount(0)
-        for e in self.egitmenler:
-            row = self.egitmen_tablo.rowCount()
-            self.egitmen_tablo.insertRow(row)
-            self.egitmen_tablo.setItem(row, 0, QTableWidgetItem(str(e.id)))
-            self.egitmen_tablo.setItem(row, 1, QTableWidgetItem(e.ad))
-            self.egitmen_tablo.setItem(row, 2, QTableWidgetItem(e.soyad))
-            self.egitmen_tablo.setItem(row, 3, QTableWidgetItem(e.uzmanlik))
-            self.egitmen_tablo.setItem(row, 4, QTableWidgetItem(e.telefon))
-            self.egitmen_tablo.setItem(row, 5, QTableWidgetItem(e.email))
-
-    def egitmen_sil(self):
-        row = self.egitmen_tablo.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Uyarı", "Silmek için bir eğitmen seçin!")
-            return
-
-        eid = int(self.egitmen_tablo.item(row, 0).text())
-
-        # Eğitmenin kursları var mı kontrol et
-        for kurs in self.kurslar:
-            if kurs.egitmen_id == eid:
-                QMessageBox.warning(self, "Uyarı", "Bu eğitmenin kursları var! Önce kursları silin.")
-                return
-
-        for e in self.egitmenler:
-            if e.id == eid:
-                self.egitmenler.remove(e)
-                break
-
-        self.egitmen_listele()
-        QMessageBox.information(self, "Başarılı", "Eğitmen silindi!")
-
-    # ===================== ÖĞRENCİ SEKMESİ =====================
-    def ogrenci_tab(self):
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-
-        # Sol panel
-        sol_panel = QFrame()
-        sol_panel.setStyleSheet("background-color: #2d2d3d; border-radius: 10px;")
-        sol_layout = QVBoxLayout(sol_panel)
-
-        form_baslik = QLabel("Yeni Öğrenci Ekle")
-        form_baslik.setStyleSheet("font-size: 18px; font-weight: bold; color: #5b5bff;")
-        sol_layout.addWidget(form_baslik)
-
-        self.ogrenci_ad = QLineEdit()
-        self.ogrenci_ad.setPlaceholderText("Ad")
-        sol_layout.addWidget(self.ogrenci_ad)
-
-        self.ogrenci_soyad = QLineEdit()
-        self.ogrenci_soyad.setPlaceholderText("Soyad")
-        sol_layout.addWidget(self.ogrenci_soyad)
-
-        self.ogrenci_email = QLineEdit()
-        self.ogrenci_email.setPlaceholderText("Email")
-        sol_layout.addWidget(self.ogrenci_email)
-
-        self.ogrenci_tel = QLineEdit()
-        self.ogrenci_tel.setPlaceholderText("Telefon")
-        sol_layout.addWidget(self.ogrenci_tel)
-
-        btn_ekle = QPushButton("➕ Öğrenci Ekle")
-        btn_ekle.clicked.connect(self.ogrenci_ekle)
-        sol_layout.addWidget(btn_ekle)
-
-        btn_sil = QPushButton("🗑 Seçili Öğrenciyi Sil")
-        btn_sil.setStyleSheet("background-color: #ff5b5b;")
-        btn_sil.clicked.connect(self.ogrenci_sil)
-        sol_layout.addWidget(btn_sil)
-
-        sol_layout.addStretch()
-
-        # Sağ panel
-        self.ogrenci_tablo = QTableWidget()
-        self.ogrenci_tablo.setColumnCount(5)
-        self.ogrenci_tablo.setHorizontalHeaderLabels(["ID", "Ad", "Soyad", "Email", "Telefon"])
-        self.ogrenci_tablo.setSelectionBehavior(QTableWidget.SelectRows)
-        self.ogrenci_tablo.horizontalHeader().setStretchLastSection(True)
-
-        layout.addWidget(sol_panel, 1)
-        layout.addWidget(self.ogrenci_tablo, 2)
-
-        self.ogrenci_listele()
-
-        return widget
-
-    def ogrenci_ekle(self):
-        if not self.ogrenci_ad.text() or not self.ogrenci_soyad.text():
-            QMessageBox.warning(self, "Uyarı", "Ad ve Soyad girmelisiniz!")
-            return
-
-        o = Ogrenci(
-            self.ogrenci_id,
-            self.ogrenci_ad.text(),
-            self.ogrenci_soyad.text(),
-            self.ogrenci_email.text(),
-            self.ogrenci_tel.text()
-        )
-        self.ogrenciler.append(o)
-        self.ogrenci_id += 1
-
-        self.ogrenci_ad.clear()
-        self.ogrenci_soyad.clear()
-        self.ogrenci_email.clear()
-        self.ogrenci_tel.clear()
-
-        self.ogrenci_listele()
-        QMessageBox.information(self, "Başarılı", "Öğrenci eklendi!")
-
-    def ogrenci_listele(self):
-        self.ogrenci_tablo.setRowCount(0)
-        for o in self.ogrenciler:
-            row = self.ogrenci_tablo.rowCount()
-            self.ogrenci_tablo.insertRow(row)
-            self.ogrenci_tablo.setItem(row, 0, QTableWidgetItem(str(o.id)))
-            self.ogrenci_tablo.setItem(row, 1, QTableWidgetItem(o.ad))
-            self.ogrenci_tablo.setItem(row, 2, QTableWidgetItem(o.soyad))
-            self.ogrenci_tablo.setItem(row, 3, QTableWidgetItem(o.email))
-            self.ogrenci_tablo.setItem(row, 4, QTableWidgetItem(o.telefon))
-
-    def ogrenci_sil(self):
-        row = self.ogrenci_tablo.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Uyarı", "Silmek için bir öğrenci seçin!")
-            return
-
-        oid = int(self.ogrenci_tablo.item(row, 0).text())
-
-        # Öğrenciyi kurslardan sil
-        for kurs in self.kurslar:
-            for o in kurs.ogrenciler[:]:
-                if o.id == oid:
-                    kurs.ogrenciler.remove(o)
-
-        for o in self.ogrenciler:
-            if o.id == oid:
-                self.ogrenciler.remove(o)
-                break
-
-        self.ogrenci_listele()
-        self.kurs_listele()
-        QMessageBox.information(self, "Başarılı", "Öğrenci silindi!")
-
-    # ===================== KURS SEKMESİ =====================
-    def kurs_tab(self):
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-
-        # Sol panel
-        sol_panel = QFrame()
-        sol_panel.setStyleSheet("background-color: #2d2d3d; border-radius: 10px;")
-        sol_layout = QVBoxLayout(sol_panel)
-
-        form_baslik = QLabel("Yeni Kurs Ekle")
-        form_baslik.setStyleSheet("font-size: 18px; font-weight: bold; color: #5b5bff;")
-        sol_layout.addWidget(form_baslik)
-
-        self.kurs_ad = QLineEdit()
-        self.kurs_ad.setPlaceholderText("Kurs Adı")
-        sol_layout.addWidget(self.kurs_ad)
-
-        self.kurs_egitmen = QComboBox()
-        self.kurs_egitmen.setPlaceholderText("Eğitmen Seç")
-        sol_layout.addWidget(self.kurs_egitmen)
-
-        self.kurs_kontenjan = QSpinBox()
-        self.kurs_kontenjan.setRange(1, 200)
-        self.kurs_kontenjan.setPrefix("📊 ")
-        sol_layout.addWidget(self.kurs_kontenjan)
-
-        self.kurs_fiyat = QDoubleSpinBox()
-        self.kurs_fiyat.setRange(0, 100000)
-        self.kurs_fiyat.setPrefix("💰 ₺")
-        sol_layout.addWidget(self.kurs_fiyat)
-
-        self.kurs_aciklama = QTextEdit()
-        self.kurs_aciklama.setPlaceholderText("Kurs Açıklaması")
-        self.kurs_aciklama.setMaximumHeight(100)
-        sol_layout.addWidget(self.kurs_aciklama)
-
-        btn_ekle = QPushButton("➕ Kurs Ekle")
-        btn_ekle.clicked.connect(self.kurs_ekle)
-        sol_layout.addWidget(btn_ekle)
-
-        btn_sil = QPushButton("🗑 Seçili Kursu Sil")
-        btn_sil.setStyleSheet("background-color: #ff5b5b;")
-        btn_sil.clicked.connect(self.kurs_sil)
-        sol_layout.addWidget(btn_sil)
-
-        sol_layout.addStretch()
-
-        # Sağ panel
-        self.kurs_tablo = QTableWidget()
-        self.kurs_tablo.setColumnCount(7)
-        self.kurs_tablo.setHorizontalHeaderLabels(["ID", "Kurs Adı", "Eğitmen", "Kontenjan", "Kayıtlı", "Fiyat", "Durum"])
-        self.kurs_tablo.setSelectionBehavior(QTableWidget.SelectRows)
-        self.kurs_tablo.horizontalHeader().setStretchLastSection(True)
-
-        layout.addWidget(sol_panel, 1)
-        layout.addWidget(self.kurs_tablo, 2)
-
-        self.egitmen_combo_guncelle()
-        self.kurs_listele()
-
-        return widget
-
-    def egitmen_combo_guncelle(self):
-        self.kurs_egitmen.clear()
-        for e in self.egitmenler:
-            self.kurs_egitmen.addItem(f"{e.ad} {e.soyad} ({e.uzmanlik})", e.id)
-
-    def kurs_ekle(self):
-        if not self.kurs_ad.text():
-            QMessageBox.warning(self, "Uyarı", "Kurs adı girmelisiniz!")
-            return
-
-        if self.kurs_egitmen.count() == 0:
-            QMessageBox.warning(self, "Uyarı", "Önce eğitmen eklemelisiniz!")
-            return
-
-        egitmen_id = self.kurs_egitmen.currentData()
-        egitmen_adi = self.kurs_egitmen.currentText()
-
-        k = Kurs(
-            self.kurs_id,
-            self.kurs_ad.text(),
-            egitmen_id,
-            egitmen_adi,
-            self.kurs_kontenjan.value(),
-            self.kurs_fiyat.value(),
-            self.kurs_aciklama.toPlainText()
-        )
-        self.kurslar.append(k)
-        self.kurs_id += 1
-
-        self.kurs_ad.clear()
-        self.kurs_kontenjan.setValue(20)
-        self.kurs_fiyat.setValue(0)
-        self.kurs_aciklama.clear()
-
-        self.kurs_listele()
-        QMessageBox.information(self, "Başarılı", "Kurs eklendi!")
-
-    def kurs_listele(self):
-        self.kurs_tablo.setRowCount(0)
-        for k in self.kurslar:
-            row = self.kurs_tablo.rowCount()
-            self.kurs_tablo.insertRow(row)
-
-            doluluk = len(k.ogrenciler)
-            durum = "🟢 AÇIK" if doluluk < k.kontenjan else "🔴 DOLU"
-            if doluluk >= k.kontenjan * 0.8:
-                durum = "🟡 NORMAL"
-
-            self.kurs_tablo.setItem(row, 0, QTableWidgetItem(str(k.id)))
-            self.kurs_tablo.setItem(row, 1, QTableWidgetItem(k.ad))
-            self.kurs_tablo.setItem(row, 2, QTableWidgetItem(k.egitmen_adi))
-            self.kurs_tablo.setItem(row, 3, QTableWidgetItem(str(k.kontenjan)))
-            self.kurs_tablo.setItem(row, 4, QTableWidgetItem(f"{doluluk}/{k.kontenjan}"))
-            self.kurs_tablo.setItem(row, 5, QTableWidgetItem(f"₺{k.fiyat:,.0f}"))
-            self.kurs_tablo.setItem(row, 6, QTableWidgetItem(durum))
-
-    def kurs_sil(self):
-        row = self.kurs_tablo.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Uyarı", "Silmek için bir kurs seçin!")
-            return
-
-        kid = int(self.kurs_tablo.item(row, 0).text())
-
-        for k in self.kurslar:
-            if k.id == kid:
-                self.kurslar.remove(k)
-                break
-
-        self.kurs_listele()
-        QMessageBox.information(self, "Başarılı", "Kurs silindi!")
-
-    # ===================== KAYIT SEKMESİ =====================
-    def kayit_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        # Üst panel - seçimler
-        ust_panel = QFrame()
-        ust_panel.setStyleSheet("background-color: #2d2d3d; border-radius: 10px;")
-        ust_layout = QHBoxLayout(ust_panel)
-
-        sol_ust = QVBoxLayout()
-        sol_ust.addWidget(QLabel("👨‍🎓 Öğrenci Seç:"))
-        self.kayit_ogrenci = QComboBox()
-        sol_ust.addWidget(self.kayit_ogrenci)
-        ust_layout.addLayout(sol_ust)
-
-        sag_ust = QVBoxLayout()
-        sag_ust.addWidget(QLabel("📚 Kurs Seç:"))
-        self.kayit_kurs = QComboBox()
-        sag_ust.addWidget(self.kayit_kurs)
-        ust_layout.addLayout(sag_ust)
-
-        btn_kaydet = QPushButton("📝 Kursa Kaydet")
-        btn_kaydet.setStyleSheet("background-color: #5b5bff; padding: 15px;")
-        btn_kaydet.clicked.connect(self.kursa_kaydet)
-        ust_layout.addWidget(btn_kaydet)
-
-        layout.addWidget(ust_panel)
-
-        # Kayıtlı öğrenciler tablosu
-        self.kayit_tablo = QTableWidget()
-        self.kayit_tablo.setColumnCount(6)
-        self.kayit_tablo.setHorizontalHeaderLabels(["Kurs ID", "Kurs Adı", "Eğitmen", "Öğrenci", "Email", "Kayıt Tarihi"])
-        self.kayit_tablo.horizontalHeader().setStretchLastSection(True)
-
-        layout.addWidget(QLabel("📋 Kayıtlı Öğrenciler"))
-        layout.addWidget(self.kayit_tablo)
-
-        # Combo'ları güncelle
-        self.kayit_combo_guncelle()
-        self.kayitlari_listele()
-
-        return widget
-
-    def kayit_combo_guncelle(self):
-        self.kayit_ogrenci.clear()
-        for o in self.ogrenciler:
-            self.kayit_ogrenci.addItem(f"{o.ad} {o.soyad} ({o.email})", o.id)
-
-        self.kayit_kurs.clear()
-        for k in self.kurslar:
-            durum = "🟢" if len(k.ogrenciler) < k.kontenjan else "🔴"
-            self.kayit_kurs.addItem(f"{durum} {k.ad} - {k.egitmen_adi} ({len(k.ogrenciler)}/{k.kontenjan})", k.id)
-
-    def kursa_kaydet(self):
-        if self.kayit_ogrenci.count() == 0:
-            QMessageBox.warning(self, "Uyarı", "Öğrenci bulunmuyor!")
-            return
-
-        if self.kayit_kurs.count() == 0:
-            QMessageBox.warning(self, "Uyarı", "Kurs bulunmuyor!")
-            return
-
-        oid = self.kayit_ogrenci.currentData()
-        kid = self.kayit_kurs.currentData()
-
-        ogrenci = None
-        for o in self.ogrenciler:
-            if o.id == oid:
-                ogrenci = o
-                break
-
-        kurs = None
-        for k in self.kurslar:
-            if k.id == kid:
-                kurs = k
-                break
-
-        if not ogrenci or not kurs:
-            QMessageBox.warning(self, "Hata", "Öğrenci veya kurs bulunamadı!")
-            return
-
-        if ogrenci in kurs.ogrenciler:
-            QMessageBox.warning(self, "Uyarı", "Öğrenci zaten bu kursta kayıtlı!")
-            return
-
-        if len(kurs.ogrenciler) >= kurs.kontenjan:
-            QMessageBox.warning(self, "Uyarı", "Kontenjan dolu!")
-            return
-
-        kurs.ogrenciler.append(ogrenci)
-
-        self.kurs_listele()
-        self.kayit_combo_guncelle()
-        self.kayitlari_listele()
-
-        QMessageBox.information(self, "Başarılı", f"{ogrenci.ad} {ogrenci.soyad} kursa kaydedildi!")
-
-    def kayitlari_listele(self):
-        self.kayit_tablo.setRowCount(0)
-        for kurs in self.kurslar:
-            for ogrenci in kurs.ogrenciler:
-                row = self.kayit_tablo.rowCount()
-                self.kayit_tablo.insertRow(row)
-                self.kayit_tablo.setItem(row, 0, QTableWidgetItem(str(kurs.id)))
-                self.kayit_tablo.setItem(row, 1, QTableWidgetItem(kurs.ad))
-                self.kayit_tablo.setItem(row, 2, QTableWidgetItem(kurs.egitmen_adi))
-                self.kayit_tablo.setItem(row, 3, QTableWidgetItem(f"{ogrenci.ad} {ogrenci.soyad}"))
-                self.kayit_tablo.setItem(row, 4, QTableWidgetItem(ogrenci.email))
-                self.kayit_tablo.setItem(row, 5, QTableWidgetItem(kurs.tarih))
-
-    # ===================== İSTATİSTİK SEKMESİ =====================
-    def istatistik_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        # İstatistik kartları
-        kart_layout = QHBoxLayout()
-
-        self.toplam_kurs = self.istatistik_karti("📚 Toplam Kurs", "0", "#5b5bff")
-        self.toplam_ogrenci = self.istatistik_karti("👨‍🎓 Toplam Öğrenci", "0", "#10b981")
-        self.toplam_egitmen = self.istatistik_karti("👨‍🏫 Toplam Eğitmen", "0", "#f59e0b")
-        self.toplam_kayit = self.istatistik_karti("📝 Toplam Kayıt", "0", "#ef4444")
-
-        kart_layout.addWidget(self.toplam_kurs)
-        kart_layout.addWidget(self.toplam_ogrenci)
-        kart_layout.addWidget(self.toplam_egitmen)
-        kart_layout.addWidget(self.toplam_kayit)
-
-        layout.addLayout(kart_layout)
-
-        # Gelir bilgisi
-        gelir_karti = self.istatistik_karti("💰 Toplam Gelir", "0 TL", "#8b5cf6")
-        layout.addWidget(gelir_karti)
-
-        # Detaylı tablo
-        layout.addWidget(QLabel("📊 Kurs Bazlı Detaylar"))
-        self.istatistik_tablo = QTableWidget()
-        self.istatistik_tablo.setColumnCount(6)
-        self.istatistik_tablo.setHorizontalHeaderLabels(["Kurs Adı", "Eğitmen", "Kontenjan", "Kayıtlı", "Doluluk", "Gelir"])
-        self.istatistik_tablo.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.istatistik_tablo)
-
-        self.istatistik_guncelle(gelir_karti)
-
-        return widget
-
-    def istatistik_karti(self, baslik, deger, renk):
-        kart = QFrame()
-        kart.setStyleSheet(f"""
-            QFrame {{
-                background-color: #2d2d3d;
-                border-radius: 12px;
-                border: 2px solid {renk};
-            }}
-        """)
-
-        layout = QVBoxLayout()
-
-        baslik_label = QLabel(baslik)
-        baslik_label.setStyleSheet("font-size: 14px; color: #a0a0a0;")
-        baslik_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(baslik_label)
-
-        self.deger_label = QLabel(deger)
-        self.deger_label.setStyleSheet(f"font-size: 28px; font-weight: bold; color: {renk};")
-        self.deger_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.deger_label)
-
-        kart.setLayout(layout)
-        return kart
-
-    def istatistik_guncelle(self, gelir_karti):
-        # Kartları güncelle
-        for child in self.toplam_kurs.findChildren(QLabel):
-            if child.text() != "📚 Toplam Kurs":
-                child.setText(str(len(self.kurslar)))
-                break
-
-        for child in self.toplam_ogrenci.findChildren(QLabel):
-            if child.text() != "👨‍🎓 Toplam Öğrenci":
-                child.setText(str(len(self.ogrenciler)))
-                break
-
-        for child in self.toplam_egitmen.findChildren(QLabel):
-            if child.text() != "👨‍🏫 Toplam Eğitmen":
-                child.setText(str(len(self.egitmenler)))
-                break
-
-        toplam_kayit = sum(len(k.ogrenciler) for k in self.kurslar)
-        for child in self.toplam_kayit.findChildren(QLabel):
-            if child.text() != "📝 Toplam Kayıt":
-                child.setText(str(toplam_kayit))
-                break
-
-        toplam_gelir = sum(len(k.ogrenciler) * k.fiyat for k in self.kurslar)
-        for child in gelir_karti.findChildren(QLabel):
-            if child.text() != "💰 Toplam Gelir":
-                child.setText(f"₺{toplam_gelir:,.0f}")
-                break
-
-        # Tablo
-        self.istatistik_tablo.setRowCount(0)
-        for k in self.kurslar:
-            row = self.istatistik_tablo.rowCount()
-            self.istatistik_tablo.insertRow(row)
-
-            doluluk = (len(k.ogrenciler) / k.kontenjan) * 100 if k.kontenjan > 0 else 0
-            gelir = len(k.ogrenciler) * k.fiyat
-
-            self.istatistik_tablo.setItem(row, 0, QTableWidgetItem(k.ad))
-            self.istatistik_tablo.setItem(row, 1, QTableWidgetItem(k.egitmen_adi))
-            self.istatistik_tablo.setItem(row, 2, QTableWidgetItem(str(k.kontenjan)))
-            self.istatistik_tablo.setItem(row, 3, QTableWidgetItem(str(len(k.ogrenciler))))
-            self.istatistik_tablo.setItem(row, 4, QTableWidgetItem(f"{doluluk:.1f}%"))
-            self.istatistik_tablo.setItem(row, 5, QTableWidgetItem(f"₺{gelir:,.0f}"))
-
-            # Doluluk rengi
-            if doluluk >= 90:
-                self.istatistik_tablo.item(row, 4).setForeground(QColor("#ff5b5b"))
-            elif doluluk >= 70:
-                self.istatistik_tablo.item(row, 4).setForeground(QColor("#f59e0b"))
-            else:
-                self.istatistik_tablo.item(row, 4).setForeground(QColor("#10b981"))
-
-
-# ===================== ÇALIŞTIR =====================
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setStyle('Fusion')
-    window = KursPlatformu()
-    window.show()
-    sys.exit(app.exec_())
+    app = AppController()
+    app.mainloop()
